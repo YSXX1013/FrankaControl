@@ -15,7 +15,13 @@ include(CPack)
 find_package(Eigen3 REQUIRED)
 find_package(Franka REQUIRED)
 find_package(Threads REQUIRED)
-
+find_package(Boost 1.70.0 REQUIRED COMPONENTS system thread json)
+if(Boost_FOUND)
+    include_directories(${Boost_INCLUDE_DIRS})
+    message(STATUS "Boost found (includes JSON, System, Thread)")
+else()
+    message(FATAL_ERROR "Boost >= 1.70 (with system, thread, json) not found.")
+endif()
 include_directories(Inc)
 
 #compile library
@@ -24,5 +30,5 @@ add_subdirectory(Test)
 
 
 #
-target_link_libraries(main Threads::Threads threads)
+target_link_libraries(main Threads::Threads threads ${Boost_LIBRARIES})
 

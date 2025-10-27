@@ -114,3 +114,6 @@ fabric.properties
 
 .idea
 .DS_Store
+
+# VScode
+.vscode
