@@ -17,7 +17,7 @@ namespace CSIR{
 namespace Robot{
 
 
-typedef MessageQue<std::array<double, DOF> > messageQ;
+// typedef MessageQue<std::array<double, DOF> > messageQ;
 typedef std::array<double, DOF> arrayDOF;
 
 /**
@@ -33,7 +33,7 @@ void initialize(franka::Robot& robot);
  * @param robot 
  * @param recieved_angle_queue 
  */
-void robot_control(franka::Robot& robot, messageQ& recieved_angle_queue);
+void robot_control(franka::Robot& robot, CommandQueue& recieved_angle_queue);
 
 /**
  * @brief update the reaultime operating postions queue for each joints,
@@ -43,7 +43,7 @@ void robot_control(franka::Robot& robot, messageQ& recieved_angle_queue);
  * @param previous_setting_angles 
  * @param recieved_angle_queue 
  */
-void update_desire_velocity(std::queue<double> desire_angle_queues[], const arrayDOF& previous_setting_angles, messageQ& recieved_angle_queue);
+void update_desire_velocity(std::queue<double> desire_angle_queues[], const arrayDOF& previous_setting_angles, CommandQueue& recieved_angle_queue);
 
 /**
  * @brief generate joint velocities by pid optimizers

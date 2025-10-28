@@ -31,7 +31,7 @@ void CSIR::Robot::initialize(franka::Robot& robot){
 }
 
 void CSIR::Robot::robot_control(franka::Robot& robot,
-                                CSIR::Robot::messageQ& received_angle_queue){
+                                CSIR::CommandQueue& received_angle_queue){
 
     cout<<"control start"<<endl;
 
@@ -76,7 +76,7 @@ void CSIR::Robot::robot_control(franka::Robot& robot,
 
 void CSIR::Robot::update_desire_velocity(queue<double> desire_angle_queues[],
                                          const arrayDOF& previous_setting_angles,
-                                         CSIR::Robot::messageQ& received_angle_queue){
+                                         CSIR::CommandQueue& received_angle_queue){
 
     //get received value from message queue from UDP protocol
     arrayDOF received = {0};

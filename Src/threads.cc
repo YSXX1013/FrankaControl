@@ -1,9 +1,10 @@
-#include <threads.hpp>
-#include <udp.hpp>
+#include "threads.hpp"
+#include "udp.hpp"
 #include <franka/robot.h>
 #include <franka/gripper.h>
-#include <robot.hpp>
-#include <parameters.hpp>
+#include "robot.hpp"
+#include "parameters.hpp"
+#include "websocket_server.hpp"
 
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -20,9 +21,8 @@
 // using namespace std;
 // using namespace nlohmann;
 
-void CSIR::thread_robot_control(const char *robot_ip_, MessageQue<std::array<double, DOF>> &message_queue)
+void CSIR::thread_robot_control(franka::Robot &robot, CommandQueue &message_queue)
 {
-    franka::Robot robot(robot_ip_);
     CSIR::Robot::initialize(robot);
     CSIR::Robot::robot_control(robot, message_queue);
 }
@@ -88,7 +88,7 @@ int CSIR::thread_gripper_control(std::condition_variable &condition, bool &if_gr
     }
 }
 
-[[noreturn]] void CSIR::thread_upd_recieve(MessageQue<std::array<double, DOF>> &message_queue, std::condition_variable &condition, bool &if_grasp)
+[[noreturn]] void CSIR::thread_upd_recieve(CommandQueue &message_queue, std::condition_variable &condition, bool &if_grasp)
 {
     int len;
 
@@ -187,5 +187,186 @@ int CSIR::thread_gripper_control(std::condition_variable &condition, bool &if_gr
         }
 
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+}
+
+[[noreturn]] void CSIR::thread_websocket_server_run(boost::asio::io_context &ioc)
+{
+    try
+    {
+        std::cout << "Starting WebSocket io_context..." << std::endl;
+        ioc.run();                                                 // 运行 io_context，处理所有异步操作
+        std::cout << "WebSocket io_context stopped." << std::endl; // 如果 run() 返回，则打印
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "WebSocket server thread exception: " << e.what() << std::endl;
+    }
+    catch (...)
+    {
+        std::cerr << "Unknown exception in WebSocket server thread." << std::endl;
+    }
+    std::cerr << "WebSocket server thread finished unexpectedly." << std::endl;
+    std::exit(EXIT_FAILURE); // 发生错误时退出程序
+}
+
+[[noreturn]] void CSIR::thread_websocket_state_broadcaster(
+    franka::Robot &robot,   // 接收 robot 引用
+    WebsocketServer &server // 接收 server 引用
+)
+{
+    // 配置反馈广播频率
+    // 100Hz -> 10ms 间隔
+    const auto broadcast_interval = std::chrono::milliseconds(10); // 可调整
+    // 取决于网络和客户端处理能力，测试后如果可行的话尝试使用更高的频率
+    // const auto broadcast_interval = std::chrono::milliseconds(1); // 1000Hz
+
+    std::cout << "WebSocket state broadcaster thread started. Interval: "
+              << std::chrono::duration_cast<std::chrono::milliseconds>(broadcast_interval).count() << "ms" << std::endl;
+
+    auto next_broadcast_time = std::chrono::steady_clock::now() + broadcast_interval;
+
+    while (true)
+    {
+        // 控制循环时间
+        std::this_thread::sleep_until(next_broadcast_time);
+        next_broadcast_time += broadcast_interval;
+        // 如果处理时间超过间隔，立即进行下一次
+
+        try
+        {
+            // 使用 readOnce() 获取最新状态
+            franka::RobotState current_state = robot.readOnce();
+
+            // 序列化
+            std::string state_json_str;
+            // 使用Boost.Asio
+            try
+            {
+                boost::json::object state_obj;
+                boost::json::array joints_array(current_state.q.begin(), current_state.q.end());
+                state_obj["current_joints"] = joints_array;
+
+                boost::json::array O_T_EE_array(current_state.O_T_EE.begin(), current_state.O_T_EE.end());
+                state_obj["O_T_EE"] = O_T_EE_array;
+
+                // 时间戳
+                // auto timestamp = std::chrono::duration_cast<std::chrono::milliseconds>(
+                //     std::chrono::system_clock::now().time_since_epoch()
+                // ).count();
+                // state_obj["timestamp_ms"] = timestamp;
+
+                state_json_str = boost::json::serialize(state_obj);
+                // 序列化结束
+
+                // 广播
+                server.broadcast(state_json_str);
+            }
+            catch (const std::exception &e_ser)
+            {
+                std::cerr << "State Broadcaster: Error during JSON serialization: " << e_ser.what() << std::endl;
+                // 序列化错误不应停止广播循环，但需要记录
+            }
+        }
+        catch (const franka::Exception &e_read)
+        {
+            // readOnce() 可能会抛出异常
+            std::cerr << "State Broadcaster: Franka exception during readOnce(): " << e_read.what() << std::endl;
+            // 短暂休眠以避免在错误状态下持续高频尝试
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            // 重置下次广播时间，避免累积延迟
+            next_broadcast_time = std::chrono::steady_clock::now() + broadcast_interval;
+        }
+        catch (const std::exception &e)
+        {
+            std::cerr << "State Broadcaster: General error: " << e.what() << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            next_broadcast_time = std::chrono::steady_clock::now() + broadcast_interval;
+        }
+        catch (...)
+        {
+            std::cerr << "State Broadcaster: Unknown error." << std::endl;
+            std::this_thread::sleep_for(std::chrono::seconds(1));
+            next_broadcast_time = std::chrono::steady_clock::now() + broadcast_interval;
+        }
+    } // end while(true)
+}
+[[noreturn]] void CSIR::thread_websocket_command_reader(
+    RawMessageQueue &raw_queue,
+    CommandQueue &command_queue,
+    std::condition_variable &condition,
+    bool &if_grasp)
+{
+    std::cout << "WebSocket command reader thread started." << std::endl;
+    std::array<double, DOF> JointVal = {0}; // 在循环外定义以复用
+
+    while (true)
+    {
+        std::string raw_message;
+        if (raw_queue.get(raw_message))
+        { // 尝试从原始队列获取消息
+            // std::cout << "Processing raw message: " << raw_message << std::endl; // Debug
+            boost::system::error_code ec;
+            boost::json::value jv = boost::json::parse(raw_message, ec);
+
+            if (ec)
+            {
+                std::cerr << "WS Command Reader JSON Parse Error: " << ec.message() << " for data: " << raw_message << std::endl;
+            }
+            else
+            {
+                try
+                {
+                    boost::json::array joints_jv = jv.at("joints").as_array();
+                    bool gripper_jv = jv.at("gripper").as_bool();
+                    if (joints_jv.size() == DOF)
+                    {
+                        for (size_t i = 0; i < DOF; ++i)
+                        {
+                            if (joints_jv[i].is_double())
+                            {
+                                JointVal[i] = joints_jv[i].as_double();
+                            }
+                            else if (joints_jv[i].is_int64())
+                            {
+                                JointVal[i] = static_cast<double>(joints_jv[i].as_int64());
+                            }
+                            else if (joints_jv[i].is_uint64())
+                            {
+                                JointVal[i] = static_cast<double>(joints_jv[i].as_uint64());
+                            }
+                            else
+                            {
+                                throw std::runtime_error("Invalid joint value type at index " + std::to_string(i));
+                            }
+                        }
+                        // std::cout << "WS Command Parsed: Joints received, putting into queue." << std::endl; // Debug
+                        command_queue.put(JointVal); // 放入主命令队列
+
+                        bool old_grasp_state = if_grasp;
+                        if_grasp = gripper_jv;
+                        // std::cout << "WS Command Parsed: Gripper command: " << if_grasp << std::endl; // Debug
+                        if (if_grasp != old_grasp_state)
+                        { // 仅当状态改变时通知
+                            // std::cout << "WS Command Reader: Notifying gripper condition." << std::endl; // Debug
+                            condition.notify_all();
+                        }
+                    }
+                    else
+                    {
+                        std::cerr << "WS Command Reader: Incorrect number of joints received: " << joints_jv.size() << ", expected " << DOF << std::endl;
+                    }
+                }
+                catch (const std::exception &e)
+                {
+                    std::cerr << "WS Command Reader Error accessing JSON data: " << e.what() << " Data: " << raw_message << std::endl;
+                }
+            }
+        }
+        else
+        {
+            // 队列为空，短暂休眠避免忙等
+            std::this_thread::sleep_for(std::chrono::milliseconds(1)); // 稍微等待一下
+        }
     }
 }
