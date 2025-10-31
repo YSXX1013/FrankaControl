@@ -19,7 +19,7 @@ const double Kp = 1.0;
 const double Ki = 0.0;
 const double Kd = 0.0;
 
-const int64_t time_update_direvalue = 20;
+const int64_t time_update_direvalue = 1;
 const int64_t time_control_interval = 1;
 
 const int control_update_max=300;
