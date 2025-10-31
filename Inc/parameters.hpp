@@ -76,6 +76,7 @@ const double max_q_dddd[7]={max_q_ddd[0]*2*1000,
                             max_q_ddd[6]*2*1000};
 
 const int udp_port = 2233;
+const int udp_state_port = 2235;
 const char* robot_ip = "172.16.0.2";
 
 };

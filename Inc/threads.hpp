@@ -6,6 +6,10 @@
 #include<array>
 #include<mutex>
 
+#include <franka/robot.h> // 添加
+#include <franka/robot_state.h> // 添加
+#include <netinet/in.h> // 添加, 为了 struct sockaddr_in
+
 #include<parameters.hpp>
 #include<condition_variable>
 namespace CSIR{
@@ -57,9 +61,49 @@ class MessageQue{
     }
 };
 
-void thread_robot_control(const char* arg_robot, MessageQue<std::array<double, DOF> >& message_queue);
-[[noreturn]] void thread_upd_recieve(MessageQue<std::array<double, DOF> >& message_queue, std::condition_variable& condition, bool& if_grasp);
-int thread_gripper_control(std::condition_variable& condition, bool& if_grasp);
+using CommandQueue = MessageQue<std::array<double, DOF>>;
+
+/**
+ * @brief 机器人实时控制线程
+ */
+void thread_robot_control(
+    franka::Robot& robot,
+    CommandQueue& command_queue,
+    std::mutex& state_mutex,
+    franka::RobotState& shared_state,
+    std::atomic<bool>& state_updated
+);
+
+/**
+ * @brief UDP 接收线程 (修改：添加共享地址参数)
+ */
+[[noreturn]] void thread_upd_recieve(
+    CommandQueue& message_queue,
+    std::condition_variable& condition,
+    bool& if_grasp,
+    std::mutex& client_addr_mutex,
+    struct sockaddr_in& shared_client_addr
+);
+
+/**
+ * @brief 夹爪控制线程
+ */
+int thread_gripper_control(
+    std::condition_variable& condition,
+    bool& if_grasp
+);
+
+/**
+ * @brief UDP 状态发送线程
+ */
+[[noreturn]] void thread_udp_send_state(
+    // franka::Robot& robot,
+    std::mutex& client_addr_mutex,
+    struct sockaddr_in& shared_client_addr,
+    std::mutex& state_mutex,
+    franka::RobotState& shared_state,
+    std::atomic<bool>& state_updated
+);
 
 };
 
